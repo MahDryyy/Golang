@@ -39,12 +39,21 @@ type RecipeRequest struct {
 }
 
 type RecipeResponse struct {
+	ID     int    `json:"id"`
 	Recipe string `json:"recipe"`
 }
 
 type Claims struct {
 	Username string `json:"username"`
 	jwt.StandardClaims
+}
+
+type LoginLog struct {
+	ID        int
+	UserID    int
+	Username  string
+	LoginTime string
+	IPAddress string
 }
 
 func InitDB() {
@@ -76,7 +85,7 @@ func AddFood(name, expiryDate, userId string) error {
 	return err
 }
 
-// Function to generate JWT token
+
 func GenerateJWT(username string) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
@@ -120,21 +129,26 @@ func AddFoodRecipe(foodID int, recipe, userId string) error {
 	_, err := DB.Exec("INSERT INTO food_recipes (food_id, recipe, user_id) VALUES (?, ?, ?)", foodID, recipe, userId)
 	return err
 }
+func GetFoodRecipes(userId string) ([]RecipeResponse, error) {
 
-func GetFoodRecipes(userId string) ([]string, error) {
-	rows, err := DB.Query("SELECT recipe FROM food_recipes WHERE user_id = ?", userId)
+	rows, err := DB.Query("SELECT id, recipe FROM food_recipes WHERE user_id = ?", userId)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query recipes: %v", err)
 	}
 	defer rows.Close()
 
-	var recipes []string
+	var recipes []RecipeResponse
+
 	for rows.Next() {
-		var recipe string
-		if err := rows.Scan(&recipe); err != nil {
-			return nil, err
+		var recipe RecipeResponse
+		if err := rows.Scan(&recipe.ID, &recipe.Recipe); err != nil {
+			return nil, fmt.Errorf("failed to scan recipe: %v", err)
 		}
 		recipes = append(recipes, recipe)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error occurred while iterating rows: %v", err)
 	}
 
 	return recipes, nil
@@ -214,6 +228,38 @@ func ValidateToken(c *gin.Context) {
 	}
 }
 
+func SaveLoginLog(userId, username, ipAddress string) error {
+	_, err := DB.Exec("INSERT INTO login_logs (user_id, username, ip_address, login_time) VALUES (?, ?, ?, ?)",
+		userId, username, ipAddress, time.Now().UTC())
+	return err
+}
+
+func GetLoginLogs(userId string) ([]LoginLog, error) {
+	rows, err := DB.Query("SELECT id, user_id, username, login_time, ip_address FROM login_logs ORDER BY login_time DESC")
+	if err != nil {
+		log.Printf("Error executing query for user_id %v: %v", userId, err)
+		return nil, fmt.Errorf("gagal menjalankan query: %v", err)
+	}
+	defer rows.Close()
+
+	var logs []LoginLog
+	for rows.Next() {
+		var logEntry LoginLog
+		if err := rows.Scan(&logEntry.ID, &logEntry.UserID, &logEntry.Username, &logEntry.LoginTime, &logEntry.IPAddress); err != nil {
+			log.Printf("Error scanning row: %v", err)
+			return nil, fmt.Errorf("gagal melakukan scan baris: %v", err)
+		}
+		logs = append(logs, logEntry)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating over rows: %v", err)
+		return nil, fmt.Errorf("terjadi kesalahan saat iterasi: %v", err)
+	}
+
+	return logs, nil
+}
+
 func LoginHandler(c *gin.Context) {
 	var req struct {
 		Username string `json:"username"`
@@ -225,8 +271,8 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	var storedPasswordHash string
-	err := DB.QueryRow("SELECT password FROM users WHERE username = ?", req.Username).Scan(&storedPasswordHash)
+	var storedPasswordHash, userId string
+	err := DB.QueryRow("SELECT id, password FROM users WHERE username = ?", req.Username).Scan(&userId, &storedPasswordHash)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
@@ -242,6 +288,13 @@ func LoginHandler(c *gin.Context) {
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to generate token"})
 		return
+	}
+
+	ipAddress := c.ClientIP()
+
+	err = SaveLoginLog(userId, req.Username, ipAddress)
+	if err != nil {
+		log.Printf("Gagal menyimpan log login: %v", err)
 	}
 
 	c.JSON(200, gin.H{"token": token})

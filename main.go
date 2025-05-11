@@ -24,9 +24,20 @@ func main() {
 	r.POST("/login", db.LoginHandler)
 
 	r.GET("/recipes", db.ValidateToken, func(c *gin.Context) {
-		userId := c.MustGet("user_id").(string)
 
-		recipes, err := db.GetFoodRecipes(userId)
+		userId, exists := c.Get("user_id")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID tidak ditemukan"})
+			return
+		}
+
+		userIdStr, ok := userId.(string)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID tidak valid"})
+			return
+		}
+
+		recipes, err := db.GetFoodRecipes(userIdStr)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal mengambil resep"})
 			return
@@ -55,6 +66,33 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"users": users})
+	})
+
+	r.GET("/login-logs", db.ValidateToken, func(c *gin.Context) {
+		userId, exists := c.Get("user_id")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found"})
+			return
+		}
+
+		role, exists := c.Get("role")
+		if !exists || role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Anda tidak memiliki izin untuk mengakses log login pengguna"})
+			return
+		}
+
+		
+		log.Printf("Fetching login logs for user_id: %v, role: %v", userId, role)
+
+	
+		logs, err := db.GetLoginLogs(userId.(string)) 
+		if err != nil {
+			log.Printf("Error while fetching login logs: %v", err) 
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal mengambil data log login"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"login_logs": logs})
 	})
 
 	r.POST("/foods", db.ValidateToken, func(c *gin.Context) {
@@ -97,8 +135,6 @@ func main() {
 
 		c.JSON(http.StatusOK, gin.H{"message": "Resep berhasil dihapus"})
 	})
-
-	
 
 	r.DELETE("/foods/:id", db.ValidateToken, func(c *gin.Context) {
 		id := c.Param("id")
